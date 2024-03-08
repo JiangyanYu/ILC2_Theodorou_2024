@@ -1,0 +1,246 @@
+---
+title: "WAT_ILC2_trajectory_analysis"
+author: "Jiangyan Yu (jiangyan.yu@uni-bonn.de)"
+date: "`r Sys.Date()`"
+output:
+  html_document: 
+    code_folding: hide
+    number_sections: yes
+    theme: united
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+Note:
+1) data was downloaded from this paper https://www.cell.com/cell-metabolism/fulltext/S1550-4131(22)00394-1?_returnURL=https%3A%2F%2Flinkinghub.elsevier.com%2Fretrieve%2Fpii%2FS1550413122003941%3Fshowall%3Dtrue#sectitle0030
+
+2) qs file was downloaded from GEO: GSE183290
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE183288
+
+3) this script is simply executed in the docker.
+docker run --rm -p 8787:8787 -e USER=jyu -e PASSWORD=jyu -e ROOT=TRUE -v /home/agschlitzer/sciebo/Projects2023/Theodorou_ILC2_ownerJYu:/home/jyu/rstudio jiangyanyu/jyu_r4.1.2:1.0
+
+# general steps
+
+```{r global_options}
+knitr::opts_chunk$set(warning=FALSE, messgae=FALSE, fig.path='Figs/', results = "hide")
+## fig.width=4, fig.height=4
+```
+
+## libraries
+
+```{r}
+library(Seurat)
+library(ComplexHeatmap)
+library(data.table)
+remotes::install_version("DescTools",version = "0.99.44")
+library(DescTools)
+library(magrittr)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+install.packages("qs")
+library(qs)
+```
+
+# working directory
+
+```{r}
+working_dir = "/home/jyu/rstudio/"
+```
+
+# load yang published dataset
+
+```{r}
+
+yang_data = qread(file = paste0(working_dir,"/GSE183288_Single_cell_atlas.qs"))
+
+yang_data
+
+DimPlot(yang_data,raster = TRUE,label = TRUE)
+```
+
+# extract ILC2/T/NK
+
+```{r}
+yang_ilc2tnk = subset(yang_data,idents = c("NK","T","ILC"))
+rm(yang_data)
+gc()
+
+DimPlot(yang_ilc2tnk,raster = TRUE)
+
+# saveRDS(yang_ilc2tnk,file = paste0(working_dir,"/manuscript/data/yang_ilc2tnk_20230616.rds"))
+```
+
+## re-do seurat analysis 
+
+```{r}
+## select only vWAT cells
+
+yang_ilc2tnk_vwat = subset(yang_ilc2tnk,subset=tissue=="vWAT")
+
+rm(yang_ilc2tnk)
+gc()
+
+## redo umap and clustering analysis
+
+yang_ilc2tnk_vwat = NormalizeData(yang_ilc2tnk_vwat)
+yang_ilc2tnk_vwat = FindVariableFeatures(yang_ilc2tnk_vwat,selection.method = "vst",nfeatures = 2000)
+yang_ilc2tnk_vwat = ScaleData(yang_ilc2tnk_vwat)
+yang_ilc2tnk_vwat = RunPCA(yang_ilc2tnk_vwat,features = VariableFeatures(yang_ilc2tnk_vwat))
+yang_ilc2tnk_vwat = FindNeighbors(yang_ilc2tnk_vwat,dims = 1:30)
+yang_ilc2tnk_vwat = FindClusters(yang_ilc2tnk_vwat,resolution = 0.5)
+
+yang_ilc2tnk_vwat = RunUMAP(yang_ilc2tnk_vwat,n.components = 3,n.neighbors = 30,dims = 1:50,min.dist = 0.1)
+# yang_ilc2tnk_vwat = readRDS(file = paste0(working_dir,"/yang_ilc2tnk_vwat_20230712.rds"))
+
+# DimPlot(yang_ilc2tnk_vwat,group.by = "seurat_clusters",label = TRUE)
+DimPlot(yang_ilc2tnk_vwat,group.by = "seurat_clusters",label = TRUE,dims = c(1,3))
+# DimPlot(yang_ilc2tnk_vwat,group.by = "seurat_clusters",label = TRUE,dims = c(2,3))
+
+# DimPlot(yang_ilc2tnk_vwat,group.by = "cell_state_label",label = TRUE)
+DimPlot(yang_ilc2tnk_vwat,group.by = "cell_state_label",label = TRUE,dims = c(1,3))
+# DimPlot(yang_ilc2tnk_vwat,group.by = "cell_state_label",label = TRUE,dims = c(2,3))
+```
+
+## DEG heatmap
+
+```{r,fig.width=8,fig.height=20}
+Idents(yang_ilc2tnk_vwat) = "seurat_clusters"
+# yang_ilc2tnk_vwat_deg = FindAllMarkers(yang_ilc2tnk_vwat)
+
+# write.csv(yang_ilc2tnk_vwat_deg,file = paste0(working_dir,"/yang_ilc2tnk_vwat_deg.csv"))
+
+yang_ilc2tnk_vwat_deg = read.csv(file = paste0(working_dir,"/yang_ilc2tnk_vwat_deg.csv"))
+
+# saveRDS(yang_ilc2tnk_vwat,file = paste0(working_dir,"/yang_ilc2tnk_vwat_20230712.rds"))
+
+top10 = yang_ilc2tnk_vwat_deg %>%
+  group_by(cluster) %>%
+  top_n(n=10,wt=avg_log2FC)
+
+tmp_seu = yang_ilc2tnk_vwat@meta.data
+tmp_seu$cell = rownames(tmp_seu)
+tmp_seu = tmp_seu %>% group_by(seurat_clusters) %>% sample_n(40) 
+tmp_seu = yang_ilc2tnk_vwat[,tmp_seu$cell]
+
+
+DoHeatmap(tmp_seu,features = top10$gene,raster = TRUE)
+
+rm(top10,tmp_seu)
+```
+
+
+## rename clusters
+
+```{r}
+Idents(yang_ilc2tnk_vwat) = "seurat_clusters"
+yang_ilc2tnk_vwat = RenameIdents(yang_ilc2tnk_vwat,
+                                 c("0" = "0:NKcell",
+                                   "1" = "1:Tcell",
+                                   "2" = "2:ILC2",
+                                   "3" = "3:NK-T",
+                                   "4" = "4:ILCP",
+                                   "5" = "5:NKcell",
+                                   "6" = "6:Tregcell",
+                                   "7" = "7:Tcell",
+                                   "8" = "8:Tcell",
+                                   "9" = "9:inte-ILCP",
+                                   "10" = "10:nd",
+                                   "11" = "11:nd",
+                                   "12" = "12:nd",
+                                   "13" = "13:nd"))
+yang_ilc2tnk_vwat$celltype1 = Idents(yang_ilc2tnk_vwat)
+Idents(yang_ilc2tnk_vwat) = "celltype1"
+```
+
+
+## T, NK markers
+
+```{r}
+FeaturePlot(yang_ilc2tnk_vwat,features = "Cd3e",dims = c(1,3),order = TRUE)
+FeaturePlot(yang_ilc2tnk_vwat,features = "Cd4",dims = c(1,3),order = TRUE)
+FeaturePlot(yang_ilc2tnk_vwat,features = "Cd8a",dims = c(1,3),order = TRUE)
+FeaturePlot(yang_ilc2tnk_vwat,features = "Klrb1c",dims = c(1,3),order = TRUE)
+FeaturePlot(yang_ilc2tnk_vwat,features = "Foxp3",dims = c(1,3),order = TRUE)
+
+DotPlot(yang_ilc2tnk_vwat,features = c("Cd3e","Cd4","Cd8a","Klrb1c","Foxp3"))+
+  coord_flip()+
+  theme(axis.text.x = element_text(
+    angle = 90,hjust = 1,vjust = 0.5
+  ))
+# FeaturePlot(yang_ilc2tnk_vwat,features = "Roc",dims = c(1,3),order = TRUE)
+```
+
+## ILC markers
+
+```{r}
+tmp_genes = c("Il7r","Il18r1","Tbx21","Ikzf3","Eomes","Kir2dl3","Gata3","Maf","Ptgdr2","Hpgds","Rorc","Il23r","Il1r1","Kit")
+
+DotPlot(yang_ilc2tnk_vwat,features = tmp_genes)+
+  coord_flip()+
+  theme(axis.text.x = element_text(
+    angle = 90,hjust = 1,vjust = 0.5
+  ))
+```
+
+# extract ILC2 cells
+
+## re-do seurat analysis
+```{r}
+Idents(yang_ilc2tnk_vwat) = "seurat_clusters"
+
+yang_vwat_ilc2 = subset(yang_ilc2tnk_vwat,idents=c(4,9,2))
+yang_vwat_ilc2$tnkilc2_cluster = yang_vwat_ilc2$seurat_clusters
+
+# DimPlot(yang_vwat_ilc2,label = TRUE,split.by = "intervention_group",ncol=2)
+# 
+yang_vwat_ilc2 = NormalizeData(yang_vwat_ilc2)
+yang_vwat_ilc2 = FindVariableFeatures(yang_vwat_ilc2,selection.method = "vst",nfeatures = 2000)
+yang_vwat_ilc2 = ScaleData(yang_vwat_ilc2)
+yang_vwat_ilc2 = RunPCA(yang_vwat_ilc2,features = VariableFeatures(yang_vwat_ilc2))
+yang_vwat_ilc2 = FindNeighbors(yang_vwat_ilc2,dims = 1:30)
+yang_vwat_ilc2 = FindClusters(yang_vwat_ilc2,resolution = 0.5)
+
+yang_vwat_ilc2 = RunUMAP(yang_vwat_ilc2,dims = 1:50,
+                         n.components = 3,
+                         min.dist = 1,
+                         a = 0.01,
+                         b = 1)
+
+DimPlot(yang_vwat_ilc2,group.by = "tnkilc2_cluster",label = TRUE)
+
+DimPlot(yang_vwat_ilc2,group.by = "seurat_clusters",label = TRUE)
+# DimPlot(yang_vwat_ilc2,group.by = "seurat_clusters",label = TRUE,dims = c(1,3))
+# DimPlot(yang_vwat_ilc2,group.by = "seurat_clusters",label = TRUE,dims = c(2,3))
+```
+
+## umap split by condition
+
+```{r}
+DimPlot(yang_vwat_ilc2,group.by = "seurat_clusters",label = TRUE,split.by = "intervention_group",ncol=2)
+
+```
+
+## DEG
+```{r}
+yang_vwat_ilc2_deg = FindAllMarkers(yang_vwat_ilc2)
+write.csv(yang_vwat_ilc2_deg,file = paste0(working_dir,"/manuscript/data/yang_vwat_ilc2_deg.csv"))
+# yang_ilc2tnk_vwat_deg = read.csv(file = paste0(working_dir,"/manuscript/data/yang_ilc2tnk_vwat.deg.csv"))
+top10 = yang_vwat_ilc2_deg %>%
+  subset(avg_log2FC >1) %>%
+  group_by(cluster) %>%
+  top_n(n=30,wt=avg_log2FC)
+
+
+DoHeatmap(yang_vwat_ilc2,features = top10$gene)
+```
+
+    
+# session infor
+```{r}
+saveRDS(yang_vwat_ilc2,file = paste0(working_dir,"/manuscript/data/yang_vwat_ilc2.rds"))
+sessionInfo()
+```
+
